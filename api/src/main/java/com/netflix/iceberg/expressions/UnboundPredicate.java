@@ -24,6 +24,7 @@ import com.netflix.iceberg.types.Types;
 
 import static com.netflix.iceberg.expressions.Expression.Operation.IS_NULL;
 import static com.netflix.iceberg.expressions.Expression.Operation.NOT_NULL;
+import static com.netflix.iceberg.expressions.Expression.Operation.STARTS_WITH;
 
 public class UnboundPredicate<T> extends Predicate<T, NamedReference> {
 
@@ -91,6 +92,10 @@ public class UnboundPredicate<T> extends Predicate<T, NamedReference> {
         default:
           throw new ValidationException("Operation must be IS_NULL or NOT_NULL");
       }
+    }
+
+    if (op() == STARTS_WITH && field.type() != Types.StringType.get()) {
+      throw new ValidationException("Operation STARTS_WITH accepts only strings");
     }
 
     Literal<T> lit = literal().to(field.type());

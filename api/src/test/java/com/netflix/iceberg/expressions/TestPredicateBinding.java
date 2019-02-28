@@ -36,6 +36,7 @@ import static com.netflix.iceberg.expressions.Expression.Operation.LT;
 import static com.netflix.iceberg.expressions.Expression.Operation.LT_EQ;
 import static com.netflix.iceberg.expressions.Expression.Operation.NOT_EQ;
 import static com.netflix.iceberg.expressions.Expression.Operation.NOT_NULL;
+import static com.netflix.iceberg.expressions.Expression.Operation.STARTS_WITH;
 import static com.netflix.iceberg.expressions.Expressions.ref;
 import static com.netflix.iceberg.TestHelpers.assertAndUnwrap;
 import static com.netflix.iceberg.types.Types.NestedField.optional;
@@ -301,5 +302,18 @@ public class TestPredicateBinding {
     StructType required = StructType.of(required(22, "s", Types.StringType.get()));
     Assert.assertEquals("NotNull inclusive a required field should be alwaysTrue",
         Expressions.alwaysTrue(), unbound.bind(required));
+  }
+
+  @Test
+  public void testStartsWithThrowsOnNotString() {
+    StructType struct = StructType.of(required(0, "x", Types.IntegerType.get()));
+    UnboundPredicate<?> unbound = new UnboundPredicate<>(STARTS_WITH, ref("x"), "abc");
+    try {
+      unbound.bind(struct);
+      Assert.fail("Should not successfully bind to struct with incorrect type");
+    } catch (ValidationException e) {
+      Assert.assertTrue("Should complain about mismatched type",
+              e.getMessage().contains("Operation STARTS_WITH accepts only strings"));
+    }
   }
 }

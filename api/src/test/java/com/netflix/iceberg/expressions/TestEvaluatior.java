@@ -20,6 +20,7 @@
 package com.netflix.iceberg.expressions;
 
 import com.netflix.iceberg.TestHelpers;
+import com.netflix.iceberg.exceptions.ValidationException;
 import com.netflix.iceberg.types.Types;
 import com.netflix.iceberg.types.Types.StructType;
 import org.apache.avro.util.Utf8;
@@ -39,6 +40,7 @@ import static com.netflix.iceberg.expressions.Expressions.not;
 import static com.netflix.iceberg.expressions.Expressions.notEqual;
 import static com.netflix.iceberg.expressions.Expressions.notNull;
 import static com.netflix.iceberg.expressions.Expressions.or;
+import static com.netflix.iceberg.expressions.Expressions.startsWith;
 import static com.netflix.iceberg.types.Types.NestedField.optional;
 import static com.netflix.iceberg.types.Types.NestedField.required;
 
@@ -153,5 +155,22 @@ public class TestEvaluatior {
         evaluator.eval(TestHelpers.Row.of(new Utf8("abc"))));
     Assert.assertFalse("string(abc) == utf8(abcd) => false",
         evaluator.eval(TestHelpers.Row.of(new Utf8("abcd"))));
+  }
+
+  @Test
+  public void testStartsWith() {
+    StructType struct = StructType.of(required(35, "x", Types.StringType.get()));
+    Evaluator evaluator = new Evaluator(struct, startsWith("x", "qw"));
+    Assert.assertTrue("startsWith(qwerty, qw)  => true",
+            evaluator.eval(TestHelpers.Row.of("qwerty")));
+    Assert.assertFalse("startsWith(abcde, qw)  => false",
+            evaluator.eval(TestHelpers.Row.of("abcde")));
+  }
+
+  @Test(expected = ValidationException.class)
+  public void testStartsWithThrowsOnNotString() {
+    StructType struct = StructType.of(required(36, "x", Types.IntegerType.get()));
+    Evaluator evaluator = new Evaluator(struct, startsWith("x", 112));
+    evaluator.eval(TestHelpers.Row.of(("xyz")));
   }
 }

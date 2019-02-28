@@ -26,14 +26,7 @@ import com.netflix.iceberg.types.Types.StructType;
 import org.junit.Assert;
 import org.junit.Test;
 
-import static com.netflix.iceberg.expressions.Expressions.alwaysFalse;
-import static com.netflix.iceberg.expressions.Expressions.alwaysTrue;
-import static com.netflix.iceberg.expressions.Expressions.and;
-import static com.netflix.iceberg.expressions.Expressions.equal;
-import static com.netflix.iceberg.expressions.Expressions.greaterThan;
-import static com.netflix.iceberg.expressions.Expressions.lessThan;
-import static com.netflix.iceberg.expressions.Expressions.not;
-import static com.netflix.iceberg.expressions.Expressions.or;
+import static com.netflix.iceberg.expressions.Expressions.*;
 import static com.netflix.iceberg.types.Types.NestedField.required;
 
 public class TestExpressionBinding {
@@ -161,5 +154,31 @@ public class TestExpressionBinding {
     Expression bound = Binder.bind(STRUCT, not(not(lessThan("y", 100))));
     BoundPredicate<?> pred = TestHelpers.assertAndUnwrap(bound);
     Assert.assertEquals("Should have the correct bound field", 1, pred.ref().fieldId());
+  }
+
+  @Test
+  public void testStartsWithThrowsOnNotString() {
+    StructType struct = StructType.of(required(0, "x", Types.IntegerType.get()));
+    Expression expr = startsWith("x", "abc");
+    try {
+      Binder.bind(struct, expr);
+      Assert.fail("Should not successfully bind to struct with incorrect type");
+    } catch (ValidationException e) {
+      Assert.assertTrue("Should complain about mismatched type",
+              e.getMessage().contains("Operation STARTS_WITH accepts only strings"));
+    }
+  }
+
+  @Test
+  public void testStartsWith() {
+    StructType struct = StructType.of(required(0, "x", Types.StringType.get()));
+    Expression expr = startsWith("x", "abc");
+    Expression boundExpr = Binder.bind(struct, expr);
+    TestHelpers.assertAllReferencesBound("StartsWith", boundExpr);
+
+    // make sure the expression is a StartsWith
+    BoundPredicate<?> pred = TestHelpers.assertAndUnwrap(boundExpr, BoundPredicate.class);
+    Assert.assertEquals("Should use the same operation", Expression.Operation.STARTS_WITH, pred.op());
+    Assert.assertEquals("Should bind x correctly", 0, pred.ref().fieldId());
   }
 }
