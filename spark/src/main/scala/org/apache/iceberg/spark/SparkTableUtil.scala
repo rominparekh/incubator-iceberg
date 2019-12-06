@@ -22,6 +22,7 @@ package org.apache.iceberg.spark
 import com.google.common.collect.Maps
 import java.nio.ByteBuffer
 import java.util
+
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{Path, PathFilter}
 import org.apache.iceberg.{DataFile, DataFiles, FileFormat, ManifestFile, ManifestWriter}
@@ -37,6 +38,7 @@ import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.catalyst.analysis.UnresolvedAttribute
 import org.apache.spark.sql.catalyst.catalog.{CatalogTable, CatalogTablePartition}
 import org.apache.spark.sql.catalyst.expressions.Expression
+
 import scala.collection.JavaConverters._
 import scala.util.Try
 
@@ -462,6 +464,45 @@ object SparkTableUtil {
 
       override def copy: ManifestFile = this
     }
+  }
+
+  def importSparkView(spark: SparkSession, sourceViewIdent: TableIdentifier, sourceViewLoc: String,
+                      targetTable: Table, stagingDir: String): Unit = {
+
+    val catalog = spark.sessionState.catalog
+    if (!catalog.tableExists(sourceViewIdent)) {
+      throw new NoSuchTableException(s"Table $sourceViewIdent does not exist")
+    }
+
+    val sourceViewLocUri =
+    val spec = SparkSchemaUtil.specForTable(spark, sourceViewIdent.unquotedString)
+    if (spec == PartitionSpec.unpartitioned) {
+      importUnpartitionedSparkView(spark, sourceViewIdent, sourceViewLoc, targetTable)
+    } else {
+      val sourceTablePartitions = getPartitions(spark, sourceViewIdent)
+      importSparkPartitions(spark, sourceTablePartitions, targetTable, spec, stagingDir)
+    }
+
+  }
+
+  private def importUnpartitionedSparkView(
+      spark: SparkSession,
+      sourceTableIdent: TableIdentifier,
+      sourceViewLoc: String,
+      targetTable: Table): Unit = {
+
+    val sourceTable = spark.sessionState.catalog.getTableMetadata(sourceTableIdent)
+    val format = sourceTable.storage.serde.orElse(sourceTable.provider)
+    require(format.nonEmpty, "Could not determine table format")
+
+    val conf = spark.sessionState.newHadoopConf()
+    val metricsConfig = MetricsConfig.fromProperties(targetTable.properties)
+
+    val files = listPartition(Map.empty, sourceViewLoc, format.get, conf, metricsConfig)
+
+    val append = targetTable.newAppend()
+    files.foreach(file => append.appendFile(file.toDataFile(PartitionSpec.unpartitioned)))
+    append.commit()
   }
 
   /**
