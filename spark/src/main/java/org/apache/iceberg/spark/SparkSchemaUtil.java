@@ -85,6 +85,25 @@ public class SparkSchemaUtil {
   }
 
   /**
+   * Returns a {@link PartitionSpec} for the given table.
+   * <p>
+   * This creates a partition spec for an existing table by looking up the table's schema and
+   * creating a spec with identity partitions for each partition column.
+   *
+   * @param spark a Spark session
+   * @param name a table name and (optional) database
+   * @return a PartitionSpec for the table
+   * @throws AnalysisException if thrown by the Spark catalog
+   */
+  public static PartitionSpec specForView(SparkSession spark, String name) throws AnalysisException {
+    PartitionSpec spec = identitySpec(
+        schemaForTable(spark, name),
+        spark.catalog().listColumns(name).collectAsList());
+    return spec == null ? PartitionSpec.unpartitioned() : spec;
+  }
+
+
+  /**
    * Convert a {@link Schema} to a {@link DataType Spark type}.
    *
    * @param schema a Schema

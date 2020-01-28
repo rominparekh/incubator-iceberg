@@ -22,10 +22,9 @@ package org.apache.iceberg.spark
 import com.google.common.collect.Maps
 import java.nio.ByteBuffer
 import java.util
-
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{Path, PathFilter}
-import org.apache.iceberg.{DataFile, DataFiles, FileFormat, ManifestFile, ManifestWriter}
+import org.apache.iceberg.{DataFile, DataFiles, FileFormat, ManifestFile, ManifestWriter, TableProperties}
 import org.apache.iceberg.{Metrics, MetricsConfig, PartitionSpec, Table}
 import org.apache.iceberg.exceptions.NoSuchTableException
 import org.apache.iceberg.hadoop.{HadoopFileIO, HadoopInputFile, SerializableConfiguration}
@@ -38,7 +37,6 @@ import org.apache.spark.sql.catalyst.TableIdentifier
 import org.apache.spark.sql.catalyst.analysis.UnresolvedAttribute
 import org.apache.spark.sql.catalyst.catalog.{CatalogTable, CatalogTablePartition}
 import org.apache.spark.sql.catalyst.expressions.Expression
-
 import scala.collection.JavaConverters._
 import scala.util.Try
 
@@ -96,7 +94,7 @@ object SparkTableUtil {
    */
   def getPartitions(spark: SparkSession, tableIdent: TableIdentifier): Seq[SparkPartition] = {
     val catalog = spark.sessionState.catalog
-    val catalogTable = catalog.getTableMetadata(tableIdent)
+    val catalogTable = catalog.getTempViewOrPermanentTableMetadata(tableIdent)
 
     catalog
       .listPartitions(tableIdent)
@@ -470,19 +468,18 @@ object SparkTableUtil {
                       targetTable: Table, stagingDir: String): Unit = {
 
     val catalog = spark.sessionState.catalog
-    if (!catalog.tableExists(sourceViewIdent)) {
+    if (catalog.getTempView(sourceViewIdent.unquotedString).isEmpty &&
+      catalog.getGlobalTempView(sourceViewIdent.unquotedString).isEmpty) {
       throw new NoSuchTableException(s"Table $sourceViewIdent does not exist")
     }
 
-    val sourceViewLocUri =
-    val spec = SparkSchemaUtil.specForTable(spark, sourceViewIdent.unquotedString)
+    val spec = SparkSchemaUtil.specForView(spark, sourceViewIdent.unquotedString)
     if (spec == PartitionSpec.unpartitioned) {
       importUnpartitionedSparkView(spark, sourceViewIdent, sourceViewLoc, targetTable)
     } else {
       val sourceTablePartitions = getPartitions(spark, sourceViewIdent)
       importSparkPartitions(spark, sourceTablePartitions, targetTable, spec, stagingDir)
     }
-
   }
 
   private def importUnpartitionedSparkView(
@@ -491,15 +488,13 @@ object SparkTableUtil {
       sourceViewLoc: String,
       targetTable: Table): Unit = {
 
-    val sourceTable = spark.sessionState.catalog.getTableMetadata(sourceTableIdent)
-    val format = sourceTable.storage.serde.orElse(sourceTable.provider)
+    val sourceTable = spark.sessionState.catalog.getTempViewOrPermanentTableMetadata(sourceTableIdent)
+    val format = sourceTable.provider.orElse(Option(targetTable.properties().get(TableProperties.DEFAULT_FILE_FORMAT)))
     require(format.nonEmpty, "Could not determine table format")
 
     val conf = spark.sessionState.newHadoopConf()
     val metricsConfig = MetricsConfig.fromProperties(targetTable.properties)
-
     val files = listPartition(Map.empty, sourceViewLoc, format.get, conf, metricsConfig)
-
     val append = targetTable.newAppend()
     files.foreach(file => append.appendFile(file.toDataFile(PartitionSpec.unpartitioned)))
     append.commit()
