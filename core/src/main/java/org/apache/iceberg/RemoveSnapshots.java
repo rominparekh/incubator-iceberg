@@ -99,9 +99,23 @@ class RemoveSnapshots implements ExpireSnapshots {
 
   private TableMetadata internalApply() {
     this.base = ops.refresh();
-
+    // Keeping track of reverse linkage i.e. if a snapshot which is sourced by other (Ex. cherry-pick) then that should
+    // also be removed from Table, else the link would be removed from snapshot history, and when expiring that
+    // source snapshot later, we might delete underlying dataFiles which are commit as part of this expiring snapshot
+    // NOTE we don't have to do this for `expireOlderThan` flag, since we know that `source-snapshot-id` will be expired
+    // first in that case.
+    List<Long> sourceIdsToRemove = Lists.newArrayList();
+    for (Long idToRemove : idsToRemove) {
+      Snapshot snapshotToRemove = base.snapshot(idToRemove);
+      if (snapshotToRemove != null) {
+        String snapshotId = snapshotToRemove.summary().getOrDefault(SnapshotSummary.SOURCE_SNAPSHOT_ID_PROP, null);
+        if (snapshotId != null) {
+          sourceIdsToRemove.add(Long.valueOf(snapshotId));
+        }
+      }
+    }
     return base.removeSnapshotsIf(snapshot ->
-        idsToRemove.contains(snapshot.snapshotId()) ||
+        idsToRemove.contains(snapshot.snapshotId()) || sourceIdsToRemove.contains(snapshot.snapshotId()) ||
         (expireOlderThan != null && snapshot.timestampMillis() < expireOlderThan));
   }
 
@@ -169,6 +183,9 @@ class RemoveSnapshots implements ExpireSnapshots {
     // only remove files that were deleted in an ancestor of the current table state to avoid
     // physically deleting files that were logically deleted in a commit that was rolled back.
     Set<Long> ancestorIds = Sets.newHashSet(SnapshotUtil.ancestorIds(base.currentSnapshot(), base::snapshot));
+    //This is the source snapshots which are being refered by all the valid ancestors
+    Set<Long> publishedSourceIds = Sets
+            .newHashSet(SnapshotUtil.publishedSourceSnapshotIds(ancestorIds, base::snapshot));
 
     Set<String> validManifests = Sets.newHashSet();
     Set<String> manifestsToScan = Sets.newHashSet();
@@ -214,14 +231,18 @@ class RemoveSnapshots implements ExpireSnapshots {
               }
 
               if (!isFromAncestor && isFromExpiringSnapshot && manifest.hasAddedFiles()) {
-                // Because the manifest was written by a snapshot that is not an ancestor of the
-                // current table state, the files added in this manifest can be removed. The extra
-                // check whether the manifest was written by a known snapshot that was expired in
-                // this commit ensures that the full ancestor list between when the snapshot was
-                // written and this expiration is known and there is no missing history. If history
-                // were missing, then the snapshot could be an ancestor of the table state but the
-                // ancestor ID set would not contain it and this would be unsafe.
-                manifestsToRevert.add(manifest.path());
+                // Checking if the dangling snapshot is not referred by a published snapshot. We can't delete the
+                // underlying files, which are published by another snapshot due to operations like CherryPick
+                if (!publishedSourceIds.contains(snapshotId)) {
+                  // Because the manifest was written by a snapshot that is not an ancestor of the
+                  // current table state, the files added in this manifest can be removed. The extra
+                  // check whether the manifest was written by a known snapshot that was expired in
+                  // this commit ensures that the full ancestor list between when the snapshot was
+                  // written and this expiration is known and there is no missing history. If history
+                  // were missing, then the snapshot could be an ancestor of the table state but the
+                  // ancestor ID set would not contain it and this would be unsafe.
+                  manifestsToRevert.add(manifest.path());
+                }
               }
             }
           }

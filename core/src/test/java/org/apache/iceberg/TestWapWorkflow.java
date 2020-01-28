@@ -20,6 +20,7 @@
 package org.apache.iceberg;
 
 import com.google.common.collect.Iterables;
+import com.google.common.collect.Lists;
 import org.apache.iceberg.exceptions.CherrypickAncestorCommitException;
 import org.apache.iceberg.exceptions.DuplicateWAPCommitException;
 import org.apache.iceberg.exceptions.ValidationException;
@@ -688,4 +689,80 @@ public class TestWapWorkflow extends TableTestBase {
           table.manageSnapshots().cherrypick(firstSnapshotId).commit();
         });
   }
+
+  @Test
+  public void testWithExpiringCherryPick() {
+    table.newAppend()
+            .appendFile(FILE_A)
+            .commit();
+    TableMetadata base = readMetadata();
+    // first WAP commit
+    table.newAppend()
+            .appendFile(FILE_B)
+            .set(SnapshotSummary.STAGED_WAP_ID_PROP, "123456789")
+            .stageOnly()
+            .commit();
+    table.refresh();
+
+    // pick the snapshot that's staged but not committed
+    Snapshot wap1Snapshot = null;
+    for (Snapshot s : table.snapshots()) {
+      if ("123456789".equalsIgnoreCase(s.summary()
+              .getOrDefault(SnapshotSummary.STAGED_WAP_ID_PROP, null))) {
+        wap1Snapshot = s;
+        break;
+      }
+    }
+    Assert.assertNotNull(wap1Snapshot);
+
+    // table has new commit so that cherrypick can come into affect.
+    table.newAppend()
+            .appendFile(FILE_C)
+            .commit();
+    table.refresh();
+
+    // cherry-pick first snapshot
+    table.manageSnapshots().cherrypick(wap1Snapshot.snapshotId()).commit();
+    table.refresh();
+    Snapshot wap1CherryPickSnapshot = table.currentSnapshot();
+    Assert.assertEquals("123456789", wap1CherryPickSnapshot.summary().getOrDefault(SnapshotSummary.PUBLISHED_WAP_ID_PROP,
+            null));
+    Assert.assertEquals(wap1CherryPickSnapshot.summary().getOrDefault(SnapshotSummary.SOURCE_SNAPSHOT_ID_PROP,
+            null), String.valueOf(wap1Snapshot.snapshotId()));
+
+
+    table.expireSnapshots().expireSnapshotId(wap1Snapshot.snapshotId()).commit();
+    table.expireSnapshots().expireSnapshotId(wap1CherryPickSnapshot.snapshotId()).commit();
+
+    Lists.newArrayList(wap1Snapshot, wap1CherryPickSnapshot).forEach(i -> {
+      i.addedFiles().forEach(item -> {
+        Assert.assertFalse(TestTables.DELETED_FILE_PATHS.contains(item.path().toString()));
+      });
+    });
+
+    // second WAP commit
+    table.newAppend()
+            .appendFile(FILE_D)
+            .set("wap.id", "987654321")
+            .stageOnly()
+            .commit();
+    table.refresh();
+
+    Snapshot wap2Snapshot = null;
+    for (Snapshot s : table.snapshots()) {
+      if ("987654321".equalsIgnoreCase(s.summary()
+              .getOrDefault(SnapshotSummary.STAGED_WAP_ID_PROP, null))) {
+        wap2Snapshot = s;
+        break;
+      }
+    }
+    Assert.assertNotNull(wap2Snapshot);
+    final long wap2SnapshotId = wap2Snapshot.snapshotId();
+    table.expireSnapshots().expireSnapshotId(wap2SnapshotId).commit();
+
+    wap2Snapshot.addedFiles().forEach(item -> {
+      Assert.assertTrue(TestTables.DELETED_FILE_PATHS.contains(item.path().toString()));
+    });
+  }
+
 }

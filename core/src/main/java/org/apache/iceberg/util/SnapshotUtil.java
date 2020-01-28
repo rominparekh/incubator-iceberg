@@ -21,8 +21,10 @@ package org.apache.iceberg.util;
 
 import com.google.common.collect.Lists;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Function;
 import org.apache.iceberg.Snapshot;
+import org.apache.iceberg.SnapshotSummary;
 import org.apache.iceberg.Table;
 
 public class SnapshotUtil {
@@ -54,5 +56,17 @@ public class SnapshotUtil {
       }
     }
     return ancestorIds;
+  }
+
+  public static List<Long> publishedSourceSnapshotIds(Set<Long> ancestorIds, Function<Long, Snapshot> lookup) {
+    List<Long> sourceSnapshotIds = Lists.newArrayList();
+    for (Long id : ancestorIds) {
+      Snapshot current = lookup.apply(id);
+      String sourceSnapshotId = current.summary().getOrDefault(SnapshotSummary.SOURCE_SNAPSHOT_ID_PROP, null);
+      if (sourceSnapshotId != null) {
+        sourceSnapshotIds.add(Long.valueOf(sourceSnapshotId));
+      }
+    }
+    return sourceSnapshotIds;
   }
 }
